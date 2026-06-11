@@ -1,0 +1,478 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum WorkspaceType {
+  DEMO
+  PRODUCTION
+}
+
+enum BillingStatus {
+  inactive
+  active
+  trialing
+}
+
+enum SubscriptionStatus {
+  DEMO
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  SUSPENDED
+}
+
+enum PaymentProvider {
+  stripe
+  razorpay
+}
+
+model Workspace {
+  id                     String                       @id @default(uuid())
+  name                   String
+  workspaceType          WorkspaceType                @default(DEMO) @map("workspace_type")
+  billingStatus          BillingStatus                @default(inactive) @map("billing_status")
+  subscriptionStatus     SubscriptionStatus           @default(DEMO) @map("subscription_status")
+  onboardingCompleted    Boolean                      @default(false)
+  trialEndsAt            DateTime?                    @map("trial_ends_at")
+  paymentProvider        PaymentProvider?             @map("payment_provider")
+  stripeCustomerId       String?                      @map("stripe_customer_id")
+  stripeSubscriptionId   String?                      @map("stripe_subscription_id")
+  razorpayCustomerId     String?                      @map("razorpay_customer_id")
+  razorpaySubscriptionId String?                      @map("razorpay_subscription_id")
+  // E.164 billing contact for Razorpay (e.g. +919876543210)
+  billingPhoneNumber     String?                      @map("billing_phone_number")
+  createdAt              DateTime                     @default(now())
+  updatedAt              DateTime                     @updatedAt
+  users                  User[]
+  workspaceOutlets       WorkspaceOutlet[]
+  billingWebhookEvents   BillingWebhookEvent[]
+  billingTransitions     WorkspaceBillingTransition[]
+  fileUploads            FileUpload[]
+  syncJobs               SyncJob[]
+  cleanTransactions      CleanTransaction[]
+
+  @@index([workspaceType])
+  @@index([subscriptionStatus])
+  @@index([razorpaySubscriptionId])
+  @@index([stripeSubscriptionId])
+  @@index([createdAt])
+  @@map("workspaces")
+}
+
+// Idempotent webhook processing — one row per provider event id.
+model BillingWebhookEvent {
+  id          String          @id @default(uuid())
+  provider    PaymentProvider
+  eventId     String          @map("event_id")
+  eventType   String          @map("event_type")
+  workspaceId String?         @map("workspace_id")
+  payloadHash String?         @map("payload_hash")
+  processedAt DateTime        @default(now()) @map("processed_at")
+  workspace   Workspace?      @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+
+  @@unique([provider, eventId])
+  @@index([workspaceId])
+}
+
+// Audit trail for subscription / workspace lifecycle transitions.
+model WorkspaceBillingTransition {
+  id                     String              @id @default(uuid())
+  workspaceId            String              @map("workspace_id")
+  fromSubscriptionStatus SubscriptionStatus? @map("from_subscription_status")
+  toSubscriptionStatus   SubscriptionStatus  @map("to_subscription_status")
+  fromWorkspaceType      WorkspaceType?      @map("from_workspace_type")
+  toWorkspaceType        WorkspaceType?      @map("to_workspace_type")
+  reason                 String
+  metadata               Json?
+  createdAt              DateTime            @default(now()) @map("created_at")
+  workspace              Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+}
+
+model User {
+  id                    String       @id @default(uuid())
+  firstName             String
+  lastName              String
+  email                 String?      @unique
+  phone                 String?      @unique
+  password              String
+  isVerified            Boolean      @default(false)
+  otpHash               String?
+  otpExpiresAt          DateTime?
+  otpAttempts           Int          @default(0)
+  otpResendCount        Int          @default(0)
+  otpLastSentAt         DateTime?
+  otpLockedUntil        DateTime?
+  refreshTokenHash      String?
+  refreshTokenExpiresAt DateTime?
+  workspaceId           String
+  role                  String       @default("owner")
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+  workspace             Workspace    @relation(fields: [workspaceId], references: [id])
+  fileUploads           FileUpload[]
+
+  // Critical indexes for auth/workspace queries
+  @@index([workspaceId])
+  @@index([email])
+  @@index([phone])
+  @@index([createdAt])
+  @@index([refreshTokenHash])
+  @@index([workspaceId, createdAt])
+  @@map("users")
+}
+
+model Restaurant {
+  id                         String                 @id @default(uuid()) @map("restaurant_id") @db.Uuid
+  name                       String                 @map("restaurant_name")
+  city                       String
+  restaurantType             String                 @map("restaurant_type")
+  priceTier                  String                 @map("price_tier")
+  cuisineFocus               String                 @map("cuisine_focus")
+  openingDate                DateTime               @map("opening_date")
+  seatingCapacity            Int                    @map("seating_capacity")
+  aggregatorDependencyScore  Decimal                @map("aggregator_dependency_score") @db.Decimal(12, 6)
+  dineInPreferenceScore      Decimal                @map("dine_in_preference_score") @db.Decimal(12, 6)
+  operationalEfficiencyScore Decimal                @map("operational_efficiency_score") @db.Decimal(12, 6)
+  premiumScore               Decimal                @map("premium_score") @db.Decimal(12, 6)
+  trafficMultiplier          Decimal                @map("traffic_multiplier") @db.Decimal(12, 6)
+  createdAt                  DateTime               @map("created_at")
+  inventoryTransactions      InventoryTransaction[]
+  menuItems                  MenuItem[]
+  orders                     Order[]
+  workspaceOutlets           WorkspaceOutlet[]
+
+  @@index([city])
+  @@index([restaurantType])
+  @@map("restaurants")
+}
+
+model Customer {
+  id                  String   @id @default(uuid()) @map("customer_id") @db.Uuid
+  name                String   @map("customer_name")
+  customerSegment     String   @map("customer_segment")
+  preferredChannel    String   @map("preferred_channel")
+  preferredOrderTime  String   @map("preferred_order_time")
+  lifetimeValue       Decimal  @map("lifetime_value") @db.Decimal(14, 2)
+  loyaltyPoints       Int      @map("loyalty_points")
+  repeatCustomerScore Decimal  @map("repeat_customer_score") @db.Decimal(10, 4)
+  city                String
+  createdAt           DateTime @map("created_at")
+  orders              Order[]
+
+  @@index([city])
+  @@index([preferredChannel])
+  @@map("customers")
+}
+
+model MenuItem {
+  id               String             @id @default(uuid()) @map("menu_item_id") @db.Uuid
+  restaurantId     String             @map("restaurant_id") @db.Uuid
+  itemName         String             @map("item_name")
+  category         String
+  subcategory      String
+  isVeg            Boolean            @map("is_veg")
+  isCombo          Boolean            @map("is_combo")
+  basePrice        Decimal            @map("base_price") @db.Decimal(12, 2)
+  costPrice        Decimal            @map("cost_price") @db.Decimal(12, 2)
+  sellingPrice     Decimal            @map("selling_price") @db.Decimal(12, 2)
+  grossMargin      Decimal            @map("gross_margin") @db.Decimal(10, 4)
+  prepTimeMins     Int                @map("prep_time_mins")
+  calories         Int
+  popularityScore  Decimal            @map("popularity_score") @db.Decimal(10, 4)
+  seasonalityScore Decimal            @map("seasonality_score") @db.Decimal(10, 4)
+  activeStatus     Boolean            @map("active_status")
+  createdAt        DateTime           @map("created_at")
+  primaryRules     ItemAffinityRule[] @relation("primaryItem")
+  secondaryRules   ItemAffinityRule[] @relation("secondaryItem")
+  restaurant       Restaurant         @relation(fields: [restaurantId], references: [id])
+  orderItems       OrderItem[]
+  recipes          Recipe[]
+
+  @@index([restaurantId])
+  @@index([category])
+  @@index([isVeg])
+  @@map("menu_items")
+}
+
+model Order {
+  id                    String                 @id @default(uuid()) @map("order_id") @db.Uuid
+  restaurantId          String                 @map("restaurant_id") @db.Uuid
+  customerId            String                 @map("customer_id") @db.Uuid
+  channel               String
+  orderStatus           String                 @map("order_status")
+  placedAt              DateTime               @map("placed_at")
+  acceptedAt            DateTime               @map("accepted_at")
+  preparedAt            DateTime               @map("prepared_at")
+  deliveredAt           DateTime               @map("delivered_at")
+  gstAmount             Decimal                @map("gst_amount") @db.Decimal(12, 2)
+  discountAmount        Decimal                @map("discount_amount") @db.Decimal(12, 2)
+  aggregatorCommission  Decimal                @map("aggregator_commission") @db.Decimal(12, 2)
+  finalAmount           Decimal                @map("final_amount") @db.Decimal(14, 2)
+  paymentStatus         String                 @map("payment_status")
+  paymentMethod         String                 @map("payment_method")
+  deliveryDistanceKm    Decimal                @map("delivery_distance_km") @db.Decimal(10, 2)
+  customerRating        Decimal                @map("customer_rating") @db.Decimal(3, 1)
+  feedbackSentiment     String                 @map("feedback_sentiment")
+  createdAt             DateTime               @map("created_at")
+  subtotal              Decimal                @db.Decimal(14, 2)
+  totalItems            Int                    @map("total_items")
+  discounts             Discount[]
+  inventoryTransactions InventoryTransaction[] @relation("relatedOrder")
+  orderItems            OrderItem[]
+  customer              Customer               @relation(fields: [customerId], references: [id])
+  restaurant            Restaurant             @relation(fields: [restaurantId], references: [id])
+  payments              Payment[]
+
+  @@index([restaurantId])
+  @@index([customerId])
+  @@index([orderStatus])
+  @@map("orders")
+}
+
+model OrderItem {
+  id                  String   @id @default(uuid()) @map("order_item_id") @db.Uuid
+  orderId             String   @map("order_id") @db.Uuid
+  menuItemId          String   @map("menu_item_id") @db.Uuid
+  itemName            String   @map("item_name")
+  category            String
+  quantity            Int
+  unitPrice           Decimal  @map("unit_price") @db.Decimal(12, 2)
+  costPrice           Decimal  @map("cost_price") @db.Decimal(12, 2)
+  totalPrice          Decimal  @map("total_price") @db.Decimal(14, 2)
+  grossProfit         Decimal  @map("gross_profit") @db.Decimal(14, 2)
+  isCombo             Boolean  @map("is_combo")
+  comboGroupId        String?  @map("combo_group_id")
+  itemStatus          String   @map("item_status")
+  prepStation         String   @map("prep_station")
+  preparationTimeMins Int      @map("preparation_time_mins")
+  createdAt           DateTime @map("created_at")
+  menuItem            MenuItem @relation(fields: [menuItemId], references: [id])
+  order               Order    @relation(fields: [orderId], references: [id])
+
+  @@index([orderId])
+  @@index([menuItemId])
+  @@map("order_items")
+}
+
+model Payment {
+  id                   String   @id @default(uuid()) @map("payment_id") @db.Uuid
+  orderId              String   @map("order_id") @db.Uuid
+  paymentMethod        String   @map("payment_method")
+  paymentGateway       String   @map("payment_gateway")
+  paymentStatus        String   @map("payment_status")
+  transactionAmount    Decimal  @map("transaction_amount") @db.Decimal(14, 2)
+  gatewayFee           Decimal  @map("gateway_fee") @db.Decimal(12, 2)
+  transactionTimestamp DateTime @map("transaction_timestamp")
+  order                Order    @relation(fields: [orderId], references: [id])
+
+  @@index([orderId])
+  @@map("payments")
+}
+
+model Discount {
+  id             String   @id @default(uuid()) @map("discount_id") @db.Uuid
+  orderId        String   @map("order_id") @db.Uuid
+  discountType   String   @map("discount_type")
+  discountCode   String   @map("discount_code")
+  discountAmount Decimal  @map("discount_amount") @db.Decimal(12, 2)
+  fundedBy       String   @map("funded_by")
+  createdAt      DateTime @map("created_at")
+  order          Order    @relation(fields: [orderId], references: [id])
+
+  @@index([orderId])
+  @@map("discounts")
+}
+
+model InventoryItem {
+  id                 String                 @id @default(uuid()) @map("inventory_item_id") @db.Uuid
+  ingredientName     String                 @map("ingredient_name")
+  ingredientCategory String                 @map("ingredient_category")
+  unit               String
+  currentStock       Decimal                @map("current_stock") @db.Decimal(14, 4)
+  reorderLevel       Decimal                @map("reorder_level") @db.Decimal(14, 4)
+  costPerUnit        Decimal                @map("cost_per_unit") @db.Decimal(12, 4)
+  supplierName       String                 @map("supplier_name")
+  perishable         Boolean
+  shelfLifeDays      Int                    @map("shelf_life_days")
+  createdAt          DateTime               @map("created_at")
+  transactions       InventoryTransaction[]
+  recipes            Recipe[]
+
+  @@index([ingredientCategory])
+  @@index([supplierName])
+  @@map("inventory_items")
+}
+
+model InventoryTransaction {
+  id                   String        @id @default(uuid()) @map("transaction_id") @db.Uuid
+  inventoryItemId      String        @map("inventory_item_id") @db.Uuid
+  restaurantId         String        @map("restaurant_id") @db.Uuid
+  transactionType      String        @map("transaction_type")
+  quantity             Decimal       @db.Decimal(14, 4)
+  transactionTimestamp DateTime      @map("transaction_timestamp")
+  relatedOrderId       String?       @map("related_order_id") @db.Uuid
+  notes                String?
+  inventoryItem        InventoryItem @relation(fields: [inventoryItemId], references: [id])
+  relatedOrder         Order?        @relation("relatedOrder", fields: [relatedOrderId], references: [id])
+  restaurant           Restaurant    @relation(fields: [restaurantId], references: [id])
+
+  @@index([inventoryItemId])
+  @@index([restaurantId])
+  @@index([relatedOrderId])
+  @@map("inventory_transactions")
+}
+
+model Recipe {
+  id                 String        @id @default(uuid()) @map("recipe_id") @db.Uuid
+  menuItemId         String        @map("menu_item_id") @db.Uuid
+  inventoryItemId    String        @map("inventory_item_id") @db.Uuid
+  ingredientQuantity Decimal       @map("ingredient_quantity") @db.Decimal(14, 4)
+  unit               String
+  inventoryItem      InventoryItem @relation(fields: [inventoryItemId], references: [id])
+  menuItem           MenuItem      @relation(fields: [menuItemId], references: [id])
+
+  @@index([menuItemId])
+  @@index([inventoryItemId])
+  @@map("recipes")
+}
+
+model WorkspaceOutlet {
+  id           String     @id @default(uuid())
+  workspaceId  String
+  restaurantId String     @db.Uuid
+  createdAt    DateTime   @default(now())
+  workspace    Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  @@unique([workspaceId, restaurantId])
+  @@index([workspaceId])
+  @@index([restaurantId])
+  @@map("workspace_outlets")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  timestamp   DateTime @default(now())
+  action      String
+  outcome     String   @default("success")
+  userId      String?
+  workspaceId String?
+  ip          String?
+  userAgent   String?
+  resource    String?
+  requestId   String?
+  meta        Json?
+
+  @@index([workspaceId, timestamp])
+  @@index([userId, timestamp])
+  @@index([action, timestamp])
+  @@map("AuditLog")
+}
+
+model ItemAffinityRule {
+  id                    String   @id @default(uuid()) @map("rule_id") @db.Uuid
+  primaryItemId         String   @map("primary_item_id") @db.Uuid
+  secondaryItemId       String   @map("secondary_item_id") @db.Uuid
+  affinityScore         Decimal  @map("affinity_score") @db.Decimal(10, 4)
+  attachmentProbability Decimal  @map("attachment_probability") @db.Decimal(10, 4)
+  primaryItem           MenuItem @relation("primaryItem", fields: [primaryItemId], references: [id])
+  secondaryItem         MenuItem @relation("secondaryItem", fields: [secondaryItemId], references: [id])
+
+  @@index([primaryItemId])
+  @@index([secondaryItemId])
+  @@map("item_affinity_rules")
+}
+
+model FileUpload {
+  id           String   @id @default(uuid())
+  workspaceId  String
+  userId       String?
+  fileName     String
+  originalName String?
+  fileType     String?
+  mimeType     String?
+  sizeBytes    Int?
+  status       String   @default("UPLOADED")
+  storagePath  String?
+  rowCount     Int?
+  errorCount   Int?
+  metadata     Json?
+  parsedData   Json?
+  errorMessage String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  syncJobs  SyncJob[]
+
+  @@index([workspaceId])
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("file_uploads")
+}
+
+model SyncJob {
+  id                String    @id @default(uuid())
+  workspaceId       String
+  fileUploadId      String?
+  type              String
+  status            String    @default("PENDING")
+  recordsFetched    Int       @default(0)
+  recordsLoaded     Int       @default(0)
+  recordsFailed     Int       @default(0)
+  duplicateHandling String?
+  errorLog          Json?
+  errorMessage      String?
+  result            Json?
+  startedAt         DateTime?
+  completedAt       DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  workspace  Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  fileUpload FileUpload? @relation(fields: [fileUploadId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId])
+  @@index([fileUploadId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("sync_jobs")
+}
+
+model CleanTransaction {
+  id              String   @id @default(uuid())
+  workspaceId     String
+  branchId        String?
+  sourceFileId    String?
+  orderId         String?
+  transactionDate DateTime
+  amount          Decimal  @db.Decimal(14, 2)
+  branchName      String?
+  customerName    String?
+  itemName        String?
+  category        String?
+  quantity        Int      @default(1)
+  paymentMode     String?
+  orderType       String?
+  status          String?
+  rawData         Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([transactionDate])
+  @@index([orderId])
+  @@map("clean_transactions")
+}

@@ -1,0 +1,47 @@
+html,
+body {
+  min-height: 100%;
+}
+
+html[data-scroll-behavior="smooth"],
+body[data-scroll-behavior="smooth"] {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+p {
+  margin: 0;
+}
+
+code,
+.counter {
+  font-family: ui-monospace, Consolas, monospace;
+  display: inline-flex;
+  border-radius: 4px;
+}
+
+code {
+  font-size: 15px;
+  line-height: 135%;
+  padding: 4px 8px;
+  background: var(--color-muted);
+  color: var(--color-foreground);
+}
+
+/* Utility helpers */
+.bg-overlay {
+  background: color-mix(in oklab, var(--background) 60%, oklch(0 0 0 / 0.6)) !important;
+}
+
+.bg-surface-subtle {
+  background: color-mix(in oklab, var(--muted) 18%, transparent) !important;
+}

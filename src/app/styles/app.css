@@ -1,0 +1,489 @@
+@import "tailwindcss" source(none);
+/* Scan all app source (path is relative to this file: src/app/styles → src/) */
+@source "../..";
+@import "tw-animate-css";
+/* Removed: shadcn/tailwind.css — not needed if shadcn package is not installed as runtime dependency */
+
+@custom-variant light (&:is(.light *));
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
+  --color-chart-grid: var(--chart-grid);
+  --color-chart-axis: var(--chart-axis);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --font-sans: var(--font-sans);
+  --font-display: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --animate-accordion-down: accordion-down 0.2s ease-out;
+  --animate-accordion-up: accordion-up 0.2s ease-out;
+
+  @keyframes accordion-down {
+    from {
+      height: 0;
+    }
+    to {
+      height: var(--radix-accordion-content-height);
+    }
+  }
+
+  @keyframes accordion-up {
+    from {
+      height: var(--radix-accordion-content-height);
+    }
+    to {
+      height: 0;
+    }
+  }
+
+  --font-heading: var(--font-sans);
+
+  --radius-3xl: calc(var(--radius) * 2.2);
+
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* PulseIQ premium analytics theme — dark is the default (:root + .dark) */
+:root,
+.dark {
+  color-scheme: dark;
+  --radius: 0.625rem;
+
+  /* Layered navy/slate surfaces — never pure black */
+  --background: oklch(0.155 0.028 262);
+  --foreground: oklch(0.94 0.012 262);
+
+  --card: oklch(0.195 0.032 262);
+  --card-foreground: oklch(0.94 0.012 262);
+
+  --popover: oklch(0.21 0.034 262);
+  --popover-foreground: oklch(0.94 0.012 262);
+
+  --primary: oklch(0.68 0.17 250);
+  --primary-foreground: oklch(0.98 0.01 262);
+
+  --secondary: oklch(0.24 0.03 262);
+  --secondary-foreground: oklch(0.9 0.012 262);
+
+  --muted: oklch(0.24 0.025 262);
+  --muted-foreground: oklch(0.68 0.02 262);
+
+  --accent: oklch(0.28 0.04 250);
+  --accent-foreground: oklch(0.78 0.14 195);
+
+  --destructive: oklch(0.65 0.2 22);
+  --destructive-foreground: oklch(0.98 0.01 0);
+
+  --success: oklch(0.72 0.15 158);
+  --success-foreground: oklch(0.12 0.02 262);
+
+  --warning: oklch(0.8 0.14 80);
+  --warning-foreground: oklch(0.12 0.02 262);
+
+  --border: oklch(1 0 0 / 9%);
+  --input: oklch(1 0 0 / 12%);
+  --ring: oklch(0.68 0.17 250);
+
+  /* Analytics chart palette — brighter for dark backgrounds */
+  --chart-1: oklch(0.74 0.16 250);
+  --chart-2: oklch(0.76 0.13 195);
+  --chart-3: oklch(0.72 0.14 158);
+  --chart-4: oklch(0.8 0.14 80);
+  --chart-5: oklch(0.74 0.17 295);
+  --chart-6: oklch(0.7 0.18 15);
+  --chart-grid: oklch(1 0 0 / 7%);
+  --chart-axis: oklch(0.68 0.02 262);
+
+  --sidebar: oklch(0.17 0.028 262);
+  --sidebar-foreground: oklch(0.9 0.012 262);
+  --sidebar-primary: oklch(0.68 0.17 250);
+  --sidebar-primary-foreground: oklch(0.98 0.01 262);
+  --sidebar-accent: oklch(0.24 0.03 262);
+  --sidebar-accent-foreground: oklch(0.9 0.012 262);
+  --sidebar-border: oklch(1 0 0 / 9%);
+  --sidebar-ring: oklch(0.68 0.17 250);
+
+  --gradient-brand: linear-gradient(135deg, oklch(0.62 0.18 250), oklch(0.7 0.15 195));
+  --gradient-radiant: radial-gradient(
+    60% 80% at 50% 0%,
+    oklch(0.62 0.18 250 / 0.22),
+    transparent 70%
+  );
+  --gradient-mesh:
+    radial-gradient(40% 60% at 20% 10%, oklch(0.62 0.18 250 / 0.14), transparent 70%),
+    radial-gradient(35% 55% at 85% 20%, oklch(0.7 0.15 195 / 0.1), transparent 70%),
+    radial-gradient(40% 50% at 60% 100%, oklch(0.65 0.15 158 / 0.08), transparent 70%);
+  --shadow-glow: 0 0 0 1px oklch(1 0 0 / 4%), 0 20px 60px -20px oklch(0.62 0.18 250 / 0.35);
+  --shadow-card: 0 1px 0 oklch(1 0 0 / 3%) inset, 0 8px 24px -12px oklch(0 0 0 / 0.45);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+    @apply border-border outline-ring/50;
+  }
+  html,
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+  }
+  body {
+    font-feature-settings: "cv11", "ss01", "ss03";
+    -webkit-font-smoothing: antialiased;
+    background-image: var(--gradient-mesh);
+    background-attachment: fixed;
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+    scroll-behavior: smooth;
+  }
+
+  [id] {
+    scroll-margin-top: 6rem;
+  }
+}
+
+@layer utilities {
+  .glass {
+    background: color-mix(in oklab, var(--card) 70%, transparent);
+    backdrop-filter: blur(14px) saturate(140%);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+    border: 1px solid var(--color-border);
+  }
+  .glass-strong {
+    background: color-mix(in oklab, var(--card) 85%, transparent);
+    backdrop-filter: blur(20px) saturate(160%);
+    border: 1px solid var(--color-border);
+  }
+  .gradient-text {
+    background: var(--gradient-brand);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .bg-gradient-brand {
+    background: var(--gradient-brand);
+  }
+  .bg-mesh {
+    background: var(--gradient-mesh);
+  }
+  .bg-radiant {
+    background: var(--gradient-radiant);
+  }
+  .shadow-glow {
+    box-shadow: var(--shadow-glow);
+  }
+  .shadow-card {
+    box-shadow: var(--shadow-card);
+  }
+  .grid-bg {
+    background-image:
+      linear-gradient(to right, color-mix(in oklab, var(--foreground) 6%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in oklab, var(--foreground) 6%, transparent) 1px, transparent 1px);
+    background-size: 48px 48px;
+    mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, black 40%, transparent 100%);
+  }
+  /* Theme-aware utility shortcuts */
+  .text-primary {
+    color: var(--color-primary);
+  }
+  .text-accent {
+    color: var(--color-accent);
+  }
+  .text-success {
+    color: var(--color-success);
+  }
+  .text-warning {
+    color: var(--color-warning);
+  }
+  .text-destructive {
+    color: var(--color-destructive);
+  }
+  .text-foreground {
+    color: var(--color-foreground);
+  }
+  .text-muted-foreground {
+    color: var(--color-muted-foreground);
+  }
+  .bg-card-subtle {
+    background: color-mix(in oklab, var(--card) 18%, transparent);
+  }
+  .bg-popover {
+    background: var(--color-popover);
+  }
+  .bg-card-strong {
+    background: color-mix(in oklab, var(--card) 85%, transparent);
+  }
+  .bg-overlay {
+    background: color-mix(in oklab, var(--background) 60%, oklch(0 0 0 / 0.6));
+  }
+  /* Background helpers mapped to theme tokens */
+  .bg-primary {
+    background: var(--color-primary);
+  }
+  .bg-secondary {
+    background: var(--color-secondary);
+  }
+  .bg-destructive {
+    background: var(--color-destructive);
+  }
+  .bg-success {
+    background: var(--color-success);
+  }
+  .bg-warning {
+    background: var(--color-warning);
+  }
+  .bg-card {
+    background: var(--color-card);
+  }
+  .bg-background {
+    background: var(--color-background);
+  }
+  .bg-muted {
+    background: var(--color-muted);
+  }
+  .bg-muted-subtle {
+    background: color-mix(in oklab, var(--muted) 18%, transparent);
+  }
+
+  /* Foreground helpers for button text and accents */
+  .text-primary-foreground {
+    color: var(--color-primary-foreground);
+  }
+  .text-secondary-foreground {
+    color: var(--color-secondary-foreground);
+  }
+  .text-destructive-foreground {
+    color: var(--color-destructive-foreground);
+  }
+  .text-success-foreground {
+    color: var(--color-success-foreground);
+  }
+  .text-muted {
+    color: var(--color-muted);
+  }
+  .dot-bg {
+    background-image: radial-gradient(color-mix(in oklab, var(--foreground) 10%, transparent) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: color-mix(in oklab, var(--foreground) 18%, transparent);
+    border-radius: 8px;
+  }
+  .animate-shimmer {
+    background: linear-gradient(90deg, transparent, oklch(1 0 0 / 0.06), transparent);
+    background-size: 200% 100%;
+    animation: shimmer 2.4s infinite;
+  }
+  @keyframes shimmer {
+    0% {
+      background-position: 200% 0;
+    }
+    100% {
+      background-position: -200% 0;
+    }
+  }
+  .animate-float {
+    animation: float 6s ease-in-out infinite;
+  }
+  @keyframes float {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-8px);
+    }
+  }
+  .animate-pulse-glow {
+    animation: pulseGlow 2.4s ease-in-out infinite;
+  }
+  @keyframes pulseGlow {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 oklch(0.68 0.18 265 / 0.5);
+    }
+    50% {
+      box-shadow: 0 0 0 12px oklch(0.68 0.18 265 / 0);
+    }
+  }
+}
+
+.light {
+  color-scheme: light;
+
+  /* Soft off-white canvas — not plain white everywhere */
+  --background: oklch(0.978 0.006 262);
+  --foreground: oklch(0.18 0.03 262);
+
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.18 0.03 262);
+
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.18 0.03 262);
+
+  --primary: oklch(0.52 0.19 250);
+  --primary-foreground: oklch(0.99 0.005 262);
+
+  --secondary: oklch(0.955 0.01 262);
+  --secondary-foreground: oklch(0.28 0.04 262);
+
+  --muted: oklch(0.955 0.008 262);
+  --muted-foreground: oklch(0.48 0.03 262);
+
+  --accent: oklch(0.94 0.03 250);
+  --accent-foreground: oklch(0.42 0.14 250);
+
+  --destructive: oklch(0.55 0.22 25);
+  --destructive-foreground: oklch(0.99 0.005 0);
+
+  --success: oklch(0.48 0.14 158);
+  --success-foreground: oklch(0.99 0.005 262);
+
+  --warning: oklch(0.62 0.16 75);
+  --warning-foreground: oklch(0.2 0.04 75);
+
+  --border: oklch(0.88 0.015 262);
+  --input: oklch(0.92 0.012 262);
+  --ring: oklch(0.52 0.19 250);
+
+  /* Analytics chart palette — deeper tones for light backgrounds */
+  --chart-1: oklch(0.5 0.18 250);
+  --chart-2: oklch(0.52 0.14 195);
+  --chart-3: oklch(0.48 0.14 158);
+  --chart-4: oklch(0.58 0.16 75);
+  --chart-5: oklch(0.5 0.2 295);
+  --chart-6: oklch(0.55 0.2 15);
+  --chart-grid: oklch(0.18 0.03 262 / 8%);
+  --chart-axis: oklch(0.48 0.03 262);
+
+  --sidebar: oklch(0.99 0.004 262);
+  --sidebar-foreground: oklch(0.18 0.03 262);
+  --sidebar-primary: oklch(0.52 0.19 250);
+  --sidebar-primary-foreground: oklch(0.99 0.005 262);
+  --sidebar-accent: oklch(0.955 0.01 262);
+  --sidebar-accent-foreground: oklch(0.28 0.04 262);
+  --sidebar-border: oklch(0.9 0.012 262);
+  --sidebar-ring: oklch(0.52 0.19 250);
+
+  --gradient-brand: linear-gradient(135deg, oklch(0.52 0.19 250), oklch(0.55 0.16 195));
+  --gradient-radiant: radial-gradient(
+    60% 80% at 50% 0%,
+    oklch(0.52 0.19 250 / 0.18),
+    transparent 70%
+  );
+  --gradient-mesh:
+    radial-gradient(40% 60% at 20% 10%, oklch(0.52 0.19 250 / 0.12), transparent 70%),
+    radial-gradient(35% 55% at 85% 20%, oklch(0.55 0.16 195 / 0.1), transparent 70%),
+    radial-gradient(40% 50% at 60% 100%, oklch(0.48 0.14 158 / 0.08), transparent 70%);
+  --shadow-glow: 0 0 0 1px oklch(0.52 0.19 250 / 12%), 0 20px 60px -20px oklch(0.52 0.19 250 / 0.28);
+  --shadow-card: 0 1px 0 oklch(1 0 0 / 80%) inset, 0 8px 24px -12px oklch(0.18 0.03 262 / 0.1);
+}
+
+/* Recharts global theme fixes — axis, grid, legend, tooltip */
+.recharts-wrapper {
+  overflow: visible;
+}
+
+.recharts-surface {
+  overflow: visible;
+}
+
+.recharts-cartesian-axis-tick text {
+  fill: var(--color-muted-foreground) !important;
+  font-size: 11px;
+}
+
+.recharts-legend-item-text {
+  color: var(--color-muted-foreground) !important;
+  font-size: 12px !important;
+}
+
+.recharts-legend-item .recharts-surface {
+  margin-right: 4px;
+}
+
+.recharts-tooltip-item,
+.recharts-tooltip-label {
+  color: var(--color-popover-foreground) !important;
+}
+
+.recharts-default-tooltip {
+  background: var(--popover) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 12px !important;
+  color: var(--popover-foreground) !important;
+  box-shadow: var(--shadow-card);
+  padding: 8px 12px !important;
+}
+
+.recharts-tooltip-wrapper,
+.recharts-tooltip-inner {
+  color: var(--color-popover-foreground);
+  background: var(--popover);
+  border-color: var(--border);
+}
+
+.recharts-cartesian-axis-tick line,
+.recharts-cartesian-axis .recharts-cartesian-axis-line {
+  stroke: var(--color-border) !important;
+}
+
+.recharts-cartesian-grid line {
+  stroke: var(--chart-grid, var(--color-border)) !important;
+  stroke-opacity: 0.55;
+}
+
+.recharts-polar-grid line,
+.recharts-polar-grid circle {
+  stroke: var(--color-border) !important;
+  stroke-opacity: 0.35;
+}
+
+.recharts-reference-line line {
+  stroke: var(--color-border) !important;
+}
