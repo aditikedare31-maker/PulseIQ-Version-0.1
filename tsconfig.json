@@ -34,8 +34,9 @@
     "node_modules",
     "prisma/seeds.ts",
     "prisma/seed.ts",
-    "scripts"
-]
-  
-    
+    "**/prisma/seeds.ts",
+    "**/prisma/seed.ts",
+    "scripts",
+    "scripts/**"
+  ]
 }
