@@ -92,8 +92,26 @@ export const verifyOtpSchema = z.object({
   code: otpCodeSchema,
 });
 
+export const verifyEmailOtpSchema = z.object({
+  email: z.string().trim().email("Enter a valid email address."),
+  code: otpCodeSchema,
+});
+
+export const verifyPhoneOtpSchema = z.object({
+  phone: billingPhoneNumberSchema,
+  code: otpCodeSchema,
+});
+
 export const resendOtpSchema = z.object({
   contact: contactSchema,
+});
+
+export const sendEmailOtpSchema = z.object({
+  email: z.string().trim().email("Enter a valid email address."),
+});
+
+export const sendPhoneOtpSchema = z.object({
+  phone: billingPhoneNumberSchema,
 });
 
 // ─── Type exports ────────────────────────────────────────────────────────────
@@ -101,4 +119,8 @@ export const resendOtpSchema = z.object({
 export type SignUpInput = z.infer<typeof signUpSchema>;
 export type SignInInput = z.infer<typeof signInSchema>;
 export type VerifyOtpInput = z.infer<typeof verifyOtpSchema>;
+export type VerifyEmailOtpInput = z.infer<typeof verifyEmailOtpSchema>;
+export type VerifyPhoneOtpInput = z.infer<typeof verifyPhoneOtpSchema>;
 export type ResendOtpInput = z.infer<typeof resendOtpSchema>;
+export type SendEmailOtpInput = z.infer<typeof sendEmailOtpSchema>;
+export type SendPhoneOtpInput = z.infer<typeof sendPhoneOtpSchema>;

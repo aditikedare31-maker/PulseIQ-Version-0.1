@@ -8,6 +8,27 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { AUTH_COOKIE_NAME, REFRESH_COOKIE_NAME } from "@/lib/auth/cookie-config";
 
+/**
+ * Simple JWT decoder for edge middleware.
+ * NOTE: This does NOT verify the signature - it only decodes the payload.
+ * The actual API routes will verify the signature properly.
+ * This is safe for redirecting users to verification page because:
+ * 1. If a user forges a token with false verification, they'll just be redirected to verify page
+ * 2. The actual API routes will reject forged tokens with proper signature verification
+ */
+function decodeJwtPayload(token: string): { userId?: string; emailVerified?: boolean; phoneVerified?: boolean } | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+
+    const payload = parts[1];
+    const decoded = Buffer.from(payload, "base64").toString("utf-8");
+    return JSON.parse(decoded);
+  } catch {
+    return null;
+  }
+}
+
 const AUTH_COOKIE = AUTH_COOKIE_NAME;
 const REFRESH_COOKIE = REFRESH_COOKIE_NAME;
 const CSRF_COOKIE = "csrf_token";
@@ -29,7 +50,7 @@ const PROTECTED_PREFIXES = [
   "/import",
 ];
 
-const AUTH_PAGES = ["/signin", "/signup", "/forgot-password", "/verify"];
+const AUTH_PAGES = ["/signin", "/signup", "/forgot-password", "/verify", "/verify-account"];
 
 function hasRefreshSession(request: NextRequest): boolean {
   const refresh = request.cookies.get(REFRESH_COOKIE)?.value;
@@ -73,12 +94,37 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
+  // Phase 1: Protected routes require at least one verification method (email OR phone)
+  if (isProtected && authTokenPresent) {
+    const authToken = request.cookies.get(AUTH_COOKIE)?.value;
+    if (authToken) {
+      const payload = decodeJwtPayload(authToken);
+      const hasMinimumVerification = (payload?.emailVerified === true) || (payload?.phoneVerified === true);
+      
+      if (!hasMinimumVerification) {
+        const url = request.nextUrl.clone();
+        url.pathname = "/verify-account";
+        url.search = "";
+        return NextResponse.redirect(url);
+      }
+    }
+  }
+
   // Auth pages redirect to dashboard if the access token is present.
   if (isAuthPage && authTokenPresent) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/dashboard";
-    url.search = "";
-    return NextResponse.redirect(url);
+    const authToken = request.cookies.get(AUTH_COOKIE)?.value;
+    if (authToken) {
+      const payload = decodeJwtPayload(authToken);
+      const hasMinimumVerification = (payload?.emailVerified === true) || (payload?.phoneVerified === true);
+      
+      // Only redirect to dashboard if user has minimum verification
+      if (hasMinimumVerification) {
+        const url = request.nextUrl.clone();
+        url.pathname = "/dashboard";
+        url.search = "";
+        return NextResponse.redirect(url);
+      }
+    }
   }
 
   const response = NextResponse.next();

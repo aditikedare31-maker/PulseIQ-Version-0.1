@@ -8,18 +8,27 @@ import { parseBody } from "@/lib/api/validate";
 import { withRequestCache } from "@/lib/request-cache";
 import {
   resendOtpSchema,
+  sendEmailOtpSchema,
+  sendPhoneOtpSchema,
   signInSchema,
   signUpSchema,
+  verifyEmailOtpSchema,
   verifyOtpSchema,
+  verifyPhoneOtpSchema,
 } from "@/lib/validators/auth.validators";
 import {
   signIn,
   signUp,
+  verifyEmailOtp,
   verifyOtp,
+  verifyPhoneOtp,
   resendOtp,
   refreshToken,
   getMe,
   logout,
+  sendEmailOtp,
+  sendPhoneOtp,
+  getVerificationStatus,
 } from "@/services/controllers/auth.controller";
 
 export const runtime = "nodejs";
@@ -33,16 +42,16 @@ export async function GET(
 
     try {
       const { action } = await params;
-      if (action !== "me") {
+      if (action !== "me" && action !== "verification-status") {
         return applyContextHeaders(
           NextResponse.json({ message: "Not found." }, { status: 404 }),
           ctx,
         );
       }
 
-      const auth = await getAuthFromRequest(request);
+      const auth = action === "me" ? await getAuthFromRequest(request) : null;
 
-      if (!auth) {
+      if (action === "me" && !auth) {
         return applyContextHeaders(
           NextResponse.json(
             {
@@ -61,13 +70,17 @@ export async function GET(
       const { req, res } = await createExpressLikeContext({
         request,
         ctx,
-        auth,
+        auth: auth ?? undefined,
       });
       const next = (err?: unknown) => {
         if (err) throw err;
       };
 
-      await getMe(req, res, next);
+      if (action === "me") {
+        await getMe(req, res, next);
+      } else if (action === "verification-status") {
+        await getVerificationStatus(req, res, next);
+      }
       return applyContextHeaders(res.toNextResponse(), ctx);
     } catch (error) {
       return applyContextHeaders(jsonError(error), ctx);
@@ -133,9 +146,17 @@ export async function POST(
             ? parseBody(signInSchema, rawBody)
             : action === "verify" || action === "verify-otp"
               ? parseBody(verifyOtpSchema, rawBody)
-              : action === "resend-otp" || action === "resend-verification"
-                ? parseBody(resendOtpSchema, rawBody)
-                : rawBody;
+              : action === "verify-email-otp"
+                ? parseBody(verifyEmailOtpSchema, rawBody)
+                : action === "verify-phone-otp"
+                  ? parseBody(verifyPhoneOtpSchema, rawBody)
+                  : action === "resend-otp" || action === "resend-verification"
+                    ? parseBody(resendOtpSchema, rawBody)
+                    : action === "send-email-otp"
+                      ? parseBody(sendEmailOtpSchema, rawBody)
+                      : action === "send-phone-otp"
+                        ? parseBody(sendPhoneOtpSchema, rawBody)
+                        : rawBody;
 
       const auth = action === "logout" ? await getAuthFromRequest(request) : null;
       const { req, res } = await createExpressLikeContext({
@@ -154,8 +175,16 @@ export async function POST(
         await signIn(req, res, next);
       } else if (action === "verify" || action === "verify-otp") {
         await verifyOtp(req, res, next);
+      } else if (action === "verify-email-otp") {
+        await verifyEmailOtp(req, res, next);
+      } else if (action === "verify-phone-otp") {
+        await verifyPhoneOtp(req, res, next);
       } else if (action === "resend-otp" || action === "resend-verification") {
         await resendOtp(req, res, next);
+      } else if (action === "send-email-otp") {
+        await sendEmailOtp(req, res, next);
+      } else if (action === "send-phone-otp") {
+        await sendPhoneOtp(req, res, next);
       } else if (action === "refresh") {
         await refreshToken(req, res, next);
       } else if (action === "logout") {

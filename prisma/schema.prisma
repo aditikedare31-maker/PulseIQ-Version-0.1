@@ -97,27 +97,30 @@ model WorkspaceBillingTransition {
 }
 
 model User {
-  id                    String       @id @default(uuid())
+  id                    String             @id @default(uuid())
   firstName             String
   lastName              String
-  email                 String?      @unique
-  phone                 String?      @unique
+  email                 String?            @unique
+  phone                 String?            @unique
   password              String
-  isVerified            Boolean      @default(false)
+  isVerified            Boolean            @default(false)
+  emailVerified         Boolean            @default(false)
+  phoneVerified         Boolean            @default(false)
   otpHash               String?
   otpExpiresAt          DateTime?
-  otpAttempts           Int          @default(0)
-  otpResendCount        Int          @default(0)
+  otpAttempts           Int                @default(0)
+  otpResendCount        Int                @default(0)
   otpLastSentAt         DateTime?
   otpLockedUntil        DateTime?
   refreshTokenHash      String?
   refreshTokenExpiresAt DateTime?
   workspaceId           String
-  role                  String       @default("owner")
-  createdAt             DateTime     @default(now())
-  updatedAt             DateTime     @updatedAt
-  workspace             Workspace    @relation(fields: [workspaceId], references: [id])
+  role                  String             @default("owner")
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+  workspace             Workspace          @relation(fields: [workspaceId], references: [id])
   fileUploads           FileUpload[]
+  verificationCodes     VerificationCode[]
 
   // Critical indexes for auth/workspace queries
   @@index([workspaceId])
@@ -127,6 +130,31 @@ model User {
   @@index([refreshTokenHash])
   @@index([workspaceId, createdAt])
   @@map("users")
+}
+
+enum VerificationCodeType {
+  EMAIL_OTP
+  PHONE_OTP
+}
+
+model VerificationCode {
+  id          String               @id @default(uuid())
+  userId      String
+  type        VerificationCodeType
+  target      String
+  codeHash    String
+  expiresAt   DateTime
+  attempts    Int                  @default(0)
+  resendCount Int                  @default(1)
+  consumedAt  DateTime?
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  user        User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@index([target])
+  @@index([expiresAt])
+  @@map("verification_codes")
 }
 
 model Restaurant {

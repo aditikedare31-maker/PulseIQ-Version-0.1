@@ -51,14 +51,21 @@ export default function SignInPage() {
       const result = await response.json().catch(() => null);
 
       if (!response.ok) {
-        if (response.status === 403) {
+        if (result?.verificationRequired) {
           sessionStorage.setItem("verificationContact", normalizedContact);
-          router.push("/verify");
-          toast.error(result?.message ?? "Please verify your account before signing in.");
+          router.push("/verify-account");
+          toast.error(result?.message ?? "Please complete verification.");
           return;
         }
 
         toast.error(result?.message ?? "Sign in failed. Please check your credentials.");
+        return;
+      }
+
+      if (result?.verificationRequired) {
+        sessionStorage.setItem("verificationContact", normalizedContact);
+        router.push("/verify-account");
+        toast.success(result?.message ?? "Please complete verification.");
         return;
       }
 

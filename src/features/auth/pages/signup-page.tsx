@@ -91,10 +91,12 @@ export default function SignUpPage() {
 
       if (typeof window !== "undefined") {
         sessionStorage.setItem("verificationContact", result.contact ?? normalizedEmail);
+        sessionStorage.setItem("verificationEmail", normalizedEmail);
+        sessionStorage.setItem("verificationPhone", normalizedPhone);
       }
 
-      toast.success(result?.message ?? "Check your email for the verification code.");
-      router.push("/verify");
+      toast.success(result?.message ?? "Please verify your email and phone.");
+      router.push("/verify-account");
     } catch (error) {
       console.error("Signup error:", error);
       toast.error("Unable to create account. Please try again later.");

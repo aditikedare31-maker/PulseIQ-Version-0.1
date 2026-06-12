@@ -95,6 +95,10 @@ export const SMTP_PORT = optionalNumber("SMTP_PORT", 587);
 export const SMTP_SECURE = process.env.SMTP_SECURE === "true";
 export const SMTP_USER = process.env.SMTP_USER?.trim() || undefined;
 export const SMTP_PASS = process.env.SMTP_PASS?.trim() || undefined;
+export const BREVO_API_KEY =
+  process.env.BREVO_API_KEY?.trim() || process.env.BRAVO_API_KEY?.trim() || "";
+export const BREVO_SMS_SENDER = optionalEnv("BREVO_SMS_SENDER", "PulseIQ");
+export const SMS_DEV_MODE = process.env.SMS_DEV_MODE === "true";
 
 // ─── Application settings ───────────────────────────────────────────────────
 export const PORT = optionalNumber("PORT", 3000);

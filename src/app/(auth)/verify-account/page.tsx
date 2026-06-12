@@ -1,7 +1,5 @@
 import VerifyPage from "@/features/auth/pages/verify-page";
 
-export const dynamic = "force-dynamic";
-
-export default function Verify() {
+export default function VerifyAccountPage() {
   return <VerifyPage />;
 }

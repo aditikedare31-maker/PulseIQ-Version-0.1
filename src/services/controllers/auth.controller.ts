@@ -4,7 +4,7 @@ import type {
   ExpressLikeResponse as Response,
   NextFunction,
 } from "@/lib/compat/express";
-import type { Prisma } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 import type { AuthContext } from "@/lib/auth/auth-context";
 
 import bcrypt from "bcryptjs";
@@ -42,6 +42,7 @@ import {
   phoneLookupVariants,
   parseIndianMobileE164,
 } from "@/lib/billing/billing-phone";
+import { sendSmsOtp } from "@/services/sms/brevo-sms.service";
 import { isSessionExpired } from "@/lib/auth/session-handler";
 import { getCachedUserById, getCachedAuthContext, cacheWorkspaceOwner } from "@/lib/request-cache";
 import { getAccountInfo } from "@/lib/account/account-state";
@@ -110,10 +111,16 @@ async function verifySmtpOnce() {
 }
 */
 
-function createToken(userId: string) {
-  const token = jwt.sign({ userId }, JWT_SECRET as string, { expiresIn: JWT_EXPIRES_IN } as jwt.SignOptions);
+function createToken(userId: string, emailVerified: boolean = false, phoneVerified: boolean = false) {
+  const token = jwt.sign(
+    { userId, emailVerified, phoneVerified },
+    JWT_SECRET as string,
+    { expiresIn: JWT_EXPIRES_IN } as jwt.SignOptions
+  );
   logger.info("auth", "jwt_created", {
     userId,
+    emailVerified,
+    phoneVerified,
     expiresIn: JWT_EXPIRES_IN,
     algorithm: "HS256",
   });
@@ -207,6 +214,217 @@ function parseContact(contact?: string) {
   return {};
 }
 
+type VerificationType = "EMAIL_OTP" | "PHONE_OTP";
+const VERIFICATION_CODE_TYPE_EMAIL: VerificationType = "EMAIL_OTP";
+const VERIFICATION_CODE_TYPE_PHONE: VerificationType = "PHONE_OTP";
+
+function generateOtpDifferentFrom(existingOtp: string) {
+  let otp = generateOtp();
+  while (otp === existingOtp) {
+    otp = generateOtp();
+  }
+  return otp;
+}
+
+function normalizePhoneNumber(value: string) {
+  return normalizePhone(value);
+}
+
+async function createVerificationCode(
+  db: any,
+  params: {
+    userId: string;
+    type: VerificationType;
+    target: string;
+    otp: string;
+    now: Date;
+    resendCount?: number;
+  }
+) {
+  return db.verificationCode.create({
+    data: {
+      userId: params.userId,
+      type: params.type,
+      target: params.target,
+      codeHash: await hashOtp(params.otp),
+      expiresAt: new Date(params.now.getTime() + OTP_TTL_MS),
+      attempts: 0,
+      resendCount: params.resendCount ?? 1,
+    },
+  });
+}
+
+async function createOtpForChannel(
+  db: any,
+  params: {
+    userId: string;
+    type: VerificationType;
+    target: string;
+    existingOtp?: string;
+    now: Date;
+    resendCount?: number;
+  }
+) {
+  const otp = params.existingOtp
+    ? generateOtpDifferentFrom(params.existingOtp)
+    : generateOtp();
+
+  await invalidateVerificationCodes(db, params.userId, params.type);
+  await createVerificationCode(db, {
+    userId: params.userId,
+    type: params.type,
+    target: params.target,
+    otp,
+    now: params.now,
+    resendCount: params.resendCount,
+  });
+
+  return otp;
+}
+
+async function sendMissingVerificationOtps(user: {
+  id: string;
+  email: string | null;
+  phone: string | null;
+  emailVerified: boolean;
+  phoneVerified: boolean;
+}) {
+  const now = new Date();
+  const result: {
+    emailOtpSent: boolean | null;
+    phoneOtpSent: boolean | null;
+    emailError?: string;
+    phoneError?: string;
+  } = {
+    emailOtpSent: null,
+    phoneOtpSent: null,
+  };
+
+  let emailOtp: string | undefined;
+  let phoneOtp: string | undefined;
+
+  if (!user.emailVerified && user.email) {
+    emailOtp = generateOtp();
+  }
+
+  if (!user.phoneVerified && user.phone) {
+    phoneOtp = emailOtp ? generateOtpDifferentFrom(emailOtp) : generateOtp();
+  }
+
+  if (!user.emailVerified && user.email) {
+    try {
+      await invalidateVerificationCodes(prisma, user.id, VERIFICATION_CODE_TYPE_EMAIL);
+      await createVerificationCode(prisma, {
+        userId: user.id,
+        type: VERIFICATION_CODE_TYPE_EMAIL,
+        target: user.email,
+        otp: emailOtp!,
+        now,
+      });
+      result.emailOtpSent = await sendVerificationEmail(user.email, emailOtp!);
+      if (!result.emailOtpSent) {
+        result.emailError = "Could not send email OTP. Please retry.";
+      }
+    } catch (error) {
+      result.emailOtpSent = false;
+      result.emailError = "Could not send email OTP. Please retry.";
+      logger.error("auth", "send_missing_email_otp_failed", {
+        userId: user.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  if (!user.phoneVerified && user.phone) {
+    try {
+      await invalidateVerificationCodes(prisma, user.id, VERIFICATION_CODE_TYPE_PHONE);
+      await createVerificationCode(prisma, {
+        userId: user.id,
+        type: VERIFICATION_CODE_TYPE_PHONE,
+        target: user.phone,
+        otp: phoneOtp!,
+        now,
+      });
+      result.phoneOtpSent = await sendSmsOtp({ phone: user.phone, otp: phoneOtp! });
+      if (!result.phoneOtpSent) {
+        result.phoneError = "Could not send SMS OTP. Please retry.";
+      }
+    } catch (error) {
+      result.phoneOtpSent = false;
+      result.phoneError = "Could not send SMS OTP. Please retry.";
+      logger.error("auth", "send_missing_phone_otp_failed", {
+        userId: user.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  if (user.emailVerified) {
+    result.emailOtpSent = null;
+  }
+  if (user.phoneVerified) {
+    result.phoneOtpSent = null;
+  }
+
+  return result;
+}
+
+async function findLatestActiveVerificationCode(
+  userId: string,
+  type: VerificationType,
+  target: string,
+) {
+  return prisma.verificationCode.findFirst({
+    where: {
+      userId,
+      type,
+      target,
+      consumedAt: null,
+    },
+    orderBy: { createdAt: "desc" },
+  });
+}
+
+async function invalidateVerificationCodes(
+  db: any,
+  userId: string,
+  type: VerificationType
+) {
+  const now = new Date();
+  await db.verificationCode.updateMany({
+    where: {
+      userId,
+      type,
+      consumedAt: null,
+    },
+    data: {
+      consumedAt: now,
+    },
+  });
+}
+
+async function getVerificationStatusByContact(contactValue?: string) {
+  const parsedContact = parseContact(contactValue);
+  if (!parsedContact.email && !parsedContact.phone) {
+    return null;
+  }
+
+  const where = parsedContact.email
+    ? { email: parsedContact.email }
+    : { phone: parsedContact.phone };
+
+  return prisma.user.findFirst({
+    where,
+    select: {
+      id: true,
+      email: true,
+      phone: true,
+      emailVerified: true,
+      phoneVerified: true,
+    },
+  });
+}
+
 const authUserSelect = {
   id: true,
   firstName: true,
@@ -217,12 +435,8 @@ const authUserSelect = {
   workspaceId: true,
   role: true,
   isVerified: true,
-  otpHash: true,
-  otpExpiresAt: true,
-  otpAttempts: true,
-  otpResendCount: true,
-  otpLastSentAt: true,
-  otpLockedUntil: true,
+  emailVerified: true,
+  phoneVerified: true,
   workspace: {
     select: {
       id: true,
@@ -382,29 +596,90 @@ export async function signUp(req: Request, res: Response, next: NextFunction) {
     }
 
     const workspaceName = String(company).trim().toUpperCase();
+    const signupStart = Date.now();
+    const now = new Date();
 
     const existingByEmail = await prisma.user.findUnique({ where: { email } });
-    if (existingByEmail) {
-      return res.status(409).json({ message: "An account already exists for this email." });
-    }
-
     const existingByPhone = await prisma.user.findFirst({
       where: { OR: phoneLookupVariants(phone).map((variant) => ({ phone: variant })) },
     });
-    if (existingByPhone) {
-      return res.status(409).json({ message: "An account already exists for this mobile number." });
+
+    const existingUser = existingByEmail ?? existingByPhone;
+    if (existingUser) {
+      if (existingUser.isVerified) {
+        return res.status(409).json({
+          message: "Account already exists. Please sign in.",
+        });
+      }
+
+      if (existingByEmail && existingByPhone && existingByEmail.id !== existingByPhone.id) {
+        return res.status(409).json({
+          message: "An account already exists with this email or phone number.",
+        });
+      }
+
+      logger.info("auth", "signup_existing_unverified_user", {
+        userId: existingUser.id,
+        emailVerified: existingUser.emailVerified,
+        phoneVerified: existingUser.phoneVerified,
+      });
+
+      const passwordHashStart = Date.now();
+      const hashedPassword = await bcrypt.hash(String(password), 12);
+      logger.info("auth", "signup_password_hash_end", {
+        durationMs: Date.now() - passwordHashStart,
+      });
+
+      const updatedUser = await prisma.user.update({
+        where: { id: existingUser.id },
+        data: {
+          firstName,
+          lastName,
+          password: hashedPassword,
+        },
+      });
+
+      const sendResult = await sendMissingVerificationOtps({
+        id: updatedUser.id,
+        email: updatedUser.email,
+        phone: updatedUser.phone,
+        emailVerified: updatedUser.emailVerified,
+        phoneVerified: updatedUser.phoneVerified,
+      });
+
+      writeAuditLog(
+        {
+          action: "auth.signup",
+          outcome: "success",
+          userId: updatedUser.id,
+          workspaceId: updatedUser.workspaceId,
+          resource: "signup",
+        },
+        req,
+      );
+
+      return res.status(200).json({
+        message: "Please verify your account to continue.",
+        verificationRequired: true,
+        redirectTo: "/verify-account",
+        emailVerified: updatedUser.emailVerified,
+        phoneVerified: updatedUser.phoneVerified,
+        emailOtpSent: sendResult.emailOtpSent,
+        phoneOtpSent: sendResult.phoneOtpSent,
+        emailError: sendResult.emailError,
+        phoneError: sendResult.phoneError,
+        contact: updatedUser.email ?? updatedUser.phone,
+      });
     }
 
-    const signupStart = Date.now();
-
-    const otp = generateOtp();
-    const otpHash = await hashOtp(otp);
+    const emailOtp = generateOtp();
+    const phoneOtp = generateOtpDifferentFrom(emailOtp);
     logger.info("auth", "signup_password_hash_start", {});
     const passwordHashStart = Date.now();
     const hashedPassword = await bcrypt.hash(String(password), 12);
-    logger.info("auth", "signup_password_hash_end", { durationMs: Date.now() - passwordHashStart });
-    const now = new Date();
-    const expiresAt = new Date(Date.now() + OTP_TTL_MS);
+    logger.info("auth", "signup_password_hash_end", {
+      durationMs: Date.now() - passwordHashStart,
+    });
 
     // For Phase 1, signup always creates a production trial workspace.
     const workspaceType = "PRODUCTION" as const;
@@ -415,7 +690,7 @@ export async function signUp(req: Request, res: Response, next: NextFunction) {
     logger.info("auth", "signup_db_tx_start", {});
     const dbTxStart = Date.now();
     const user = await prisma.$transaction(async (tx) => {
-      return tx.user.create({
+      const createdUser = await tx.user.create({
         data: {
           firstName,
           lastName,
@@ -423,11 +698,8 @@ export async function signUp(req: Request, res: Response, next: NextFunction) {
           phone,
           password: hashedPassword,
           isVerified: false,
-          otpHash,
-          otpExpiresAt: expiresAt,
-          otpAttempts: 0,
-          otpResendCount: 1,
-          otpLastSentAt: now,
+          emailVerified: false,
+          phoneVerified: false,
           role: "owner",
           workspace: {
             create: {
@@ -445,27 +717,41 @@ export async function signUp(req: Request, res: Response, next: NextFunction) {
           workspace: true,
         },
       });
+
+      await createVerificationCode(tx, {
+        userId: createdUser.id,
+        type: VERIFICATION_CODE_TYPE_EMAIL,
+        target: email,
+        otp: emailOtp,
+        now,
+      });
+
+      await createVerificationCode(tx, {
+        userId: createdUser.id,
+        type: VERIFICATION_CODE_TYPE_PHONE,
+        target: phone,
+        otp: phoneOtp,
+        now,
+      });
+
+      return createdUser;
     });
 
     logger.info("auth", "signup_db_tx_end", { durationMs: Date.now() - dbTxStart });
-
     logger.info("auth", "signup_total", { durationMs: Date.now() - signupStart });
 
-    const otpSent = await sendOtp({ email: user.email ?? undefined }, otp);
-    if (!otpSent) {
-      return res.status(500).json({
-        message:
-          "Account created, but verification code could not be sent. Please use resend OTP.",
-        contact: email,
-        requiresVerification: true,
-      });
-    }
+    const emailSent = await sendVerificationEmail(email, emailOtp);
+    const smsSent = await sendSmsOtp({ phone, otp: phoneOtp });
+    const responseStatus = emailSent && smsSent ? 201 : 200;
+    const responseMessage = emailSent && smsSent
+      ? "Account created successfully. Verification codes were sent."
+      : "Account created. Verification codes could not be delivered on all channels. Please retry the missing delivery.";
 
     writeAuditLog(
       {
         action: "auth.signup",
         userId: user.id,
-        workspaceId: (user as unknown as { workspace?: { id?: string } }).workspace?.id,
+        workspaceId: user.workspaceId,
         resource: "signup",
       },
       req,
@@ -473,9 +759,14 @@ export async function signUp(req: Request, res: Response, next: NextFunction) {
 
     logger.info("auth", "signup_success", { userId: user.id, email: user.email });
 
-    return res.status(201).json({
-      message: "Account created successfully. A verification code was sent to your email.",
-      requiresVerification: true,
+    return res.status(responseStatus).json({
+      message: responseMessage,
+      verificationRequired: true,
+      redirectTo: "/verify-account",
+      emailVerified: false,
+      phoneVerified: false,
+      emailOtpSent: emailSent,
+      phoneOtpSent: smsSent,
       contact: email,
       user: {
         id: user.id,
@@ -484,9 +775,9 @@ export async function signUp(req: Request, res: Response, next: NextFunction) {
         email: user.email,
         phone: user.phone,
         workspace: {
-          id: (user as unknown as { workspace?: { id?: string; name?: string; billingPhoneNumber?: string } }).workspace?.id,
-          name: (user as unknown as { workspace?: { id?: string; name?: string; billingPhoneNumber?: string } }).workspace?.name,
-          billingPhoneNumber: (user as unknown as { workspace?: { id?: string; name?: string; billingPhoneNumber?: string } }).workspace?.billingPhoneNumber,
+          id: user.workspace?.id,
+          name: user.workspace?.name,
+          billingPhoneNumber: user.workspace?.billingPhoneNumber,
         },
       },
     });
@@ -554,16 +845,42 @@ export async function signIn(req: Request, res: Response, next: NextFunction) {
       return res.status(401).json({ message: "Invalid credentials." });
     }
 
-    if (!user.isVerified) {
-      logger.info("auth", "signin_response_ready", { status: 403, durationMs: Date.now() - requestStart });
-      return res
-        .status(403)
-        .json({ message: "Account verification is required before signing in." });
+    // Phase 1: Allow signin with at least one verification method (email OR phone)
+    const hasMinimumVerification = user.emailVerified || user.phoneVerified;
+    if (!hasMinimumVerification) {
+      const sendResult = await sendMissingVerificationOtps({
+        id: user.id,
+        email: user.email,
+        phone: user.phone,
+        emailVerified: user.emailVerified,
+        phoneVerified: user.phoneVerified,
+      });
+
+      logger.info("auth", "signin_unverified_flow", {
+        userId: user.id,
+        emailVerified: user.emailVerified,
+        phoneVerified: user.phoneVerified,
+        emailOtpSent: sendResult.emailOtpSent,
+        phoneOtpSent: sendResult.phoneOtpSent,
+      });
+
+      return res.status(200).json({
+        message: "Please complete verification to access your account.",
+        verificationRequired: true,
+        redirectTo: "/verify-account",
+        emailVerified: user.emailVerified,
+        phoneVerified: user.phoneVerified,
+        emailOtpSent: sendResult.emailOtpSent,
+        phoneOtpSent: sendResult.phoneOtpSent,
+        emailError: sendResult.emailError,
+        phoneError: sendResult.phoneError,
+        contact: user.email ?? user.phone,
+      });
     }
 
     logger.info("auth", "jwt_create_start", { userId: user.id });
     const jwtCreateStart = Date.now();
-    const token = createToken(user.id);
+    const token = createToken(user.id, user.emailVerified, user.phoneVerified);
     sendTokenCookie(res, token);
     logger.info("auth", "jwt_create_end", {
       userId: user.id,
@@ -632,58 +949,158 @@ export async function signIn(req: Request, res: Response, next: NextFunction) {
   }
 }
 
-export async function verifyOtp(req: Request, res: Response, next: NextFunction) {
+function maskEmail(email?: string | null): string {
+  if (!email) {
+    return "";
+  }
+
+  const [local, domain] = email.split("@");
+  if (!domain) {
+    return email;
+  }
+
+  const visible = Math.min(2, local.length);
+  const maskedLocal = `${local.slice(0, visible)}${"*".repeat(Math.max(local.length - visible, 1))}`;
+  return `${maskedLocal}@${domain}`;
+}
+
+function maskPhone(phone?: string | null): string {
+  if (!phone) {
+    return "";
+  }
+
+  const digits = phone.replace(/\D/g, "");
+  if (digits.length <= 4) {
+    return "*".repeat(digits.length);
+  }
+
+  const prefix = phone.slice(0, phone.length - digits.length);
+  const visible = digits.slice(-4);
+  const masked = "*".repeat(Math.max(digits.length - 4, 4));
+  return `${prefix}${masked}${visible}`;
+}
+
+async function updateUserVerificationStatus(userId: string, type: VerificationType) {
+  return prisma.$transaction(async (tx) => {
+    const user = await tx.user.findUnique({
+      where: { id: userId },
+      select: { emailVerified: true, phoneVerified: true },
+    });
+
+    if (!user) {
+      return null;
+    }
+
+    const emailVerified = type === VERIFICATION_CODE_TYPE_EMAIL ? true : user.emailVerified;
+    const phoneVerified = type === VERIFICATION_CODE_TYPE_PHONE ? true : user.phoneVerified;
+    // Phase 1: User can access dashboard with at least one verification method
+    const isVerified = emailVerified || phoneVerified;
+    const fullyVerified = emailVerified && phoneVerified;
+
+    return tx.user.update({
+      where: { id: userId },
+      data: {
+        emailVerified,
+        phoneVerified,
+        isVerified,
+      },
+      select: {
+        emailVerified: true,
+        phoneVerified: true,
+        isVerified: true,
+      },
+    });
+  });
+}
+
+async function validateVerificationCode(
+  userId: string,
+  type: VerificationType,
+  target: string,
+  code: string,
+) {
+  const now = new Date();
+  const codeRecord = await findLatestActiveVerificationCode(userId, type, target);
+
+  if (!codeRecord) {
+    return { status: "missing" as const };
+  }
+
+  if (codeRecord.expiresAt < now) {
+    return { status: "expired" as const, codeId: codeRecord.id };
+  }
+
+  if (codeRecord.attempts >= OTP_MAX_ATTEMPTS) {
+    return { status: "locked" as const, codeId: codeRecord.id };
+  }
+
+  const isValid = await bcrypt.compare(code, codeRecord.codeHash);
+  if (!isValid) {
+    const attempts = codeRecord.attempts + 1;
+    await prisma.verificationCode.update({
+      where: { id: codeRecord.id },
+      data: {
+        attempts,
+        consumedAt: attempts >= OTP_MAX_ATTEMPTS ? now : null,
+      },
+    });
+
+    return { status: attempts >= OTP_MAX_ATTEMPTS ? "locked" as const : "invalid" as const };
+  }
+
+  await prisma.verificationCode.update({
+    where: { id: codeRecord.id },
+    data: { consumedAt: now },
+  });
+
+  return { status: "ok" as const };
+}
+
+async function resolveUserForVerification(contact: string) {
+  return findUserByContact(contact);
+}
+
+export async function verifyEmailOtp(req: Request, res: Response, next: NextFunction) {
   try {
     const body = req.body as Record<string, unknown>;
-    const contact = body.contact as string | undefined;
+    const email = body.email as string | undefined;
     const code = body.code as string | number | undefined;
 
-    if (!contact || !code) {
-      return res.status(400).json({ message: "Contact and OTP code are required." });
+    if (!email || !code) {
+      return res.status(400).json({ message: "Email and OTP code are required." });
     }
 
     if (!/^\d{6}$/.test(String(code))) {
       return res.status(400).json({ message: "OTP code must be a 6-digit number." });
     }
 
-    const user = await findUserByContact(contact);
-    if (!user) {
+    const user = await resolveUserForVerification(email);
+    if (!user || !user.email) {
       writeAuditLog(
-        { action: "auth.verify_otp_failed", outcome: "failure", resource: "verify" },
+        { action: "auth.verify_otp_failed", outcome: "failure", resource: "verify-email" },
         req,
       );
-      return res.status(400).json({ message: "Unable to verify the provided contact and code." });
+      return res.status(400).json({ message: "Unable to verify the provided email and code." });
     }
 
-    if (user.isVerified) {
-      return res.status(200).json({ message: "Account is already verified." });
+    if (user.emailVerified) {
+      return res.status(200).json({
+        message: "Email is already verified.",
+        emailVerified: true,
+        phoneVerified: user.phoneVerified,
+        isVerified: user.isVerified,
+      });
     }
 
-    const now = new Date();
-    if (user.otpLockedUntil && user.otpLockedUntil > now) {
-      return res
-        .status(429)
-        .json({ message: "Too many invalid attempts. Please try again later." });
-    }
-
-    if (!user.otpHash || !user.otpExpiresAt) {
-      return res.status(400).json({ message: "No OTP is available. Please request a new code." });
-    }
-
-    if (user.otpExpiresAt < now) {
-      return res.status(400).json({ message: "OTP has expired. Please resend a new code." });
-    }
-
-    const isValidOtp = await bcrypt.compare(String(code), String(user.otpHash));
-    if (!isValidOtp) {
-      const attempts = (user.otpAttempts ?? 0) + 1;
-      const updateData: Prisma.UserUpdateInput = { otpAttempts: attempts };
-
-      if (attempts >= OTP_MAX_ATTEMPTS) {
-        updateData.otpLockedUntil = new Date(Date.now() + OTP_LOCK_MS);
-      }
-
-      await prisma.user.update({ where: { id: user.id }, data: updateData });
+    const validation = await validateVerificationCode(user.id, VERIFICATION_CODE_TYPE_EMAIL, user.email, String(code));
+    if (validation.status !== "ok") {
+      const statusCode = validation.status === "locked" ? 429 : 400;
+      const message =
+        validation.status === "expired"
+          ? "OTP has expired. Please request a new code."
+          : validation.status === "locked"
+          ? "Too many invalid attempts. Please request a new code."
+          : "Invalid OTP code.";
 
       writeAuditLog(
         {
@@ -691,68 +1108,159 @@ export async function verifyOtp(req: Request, res: Response, next: NextFunction)
           outcome: "failure",
           userId: user.id,
           workspaceId: user.workspaceId,
-          resource: "verify",
+          resource: "verify-email",
         },
         req,
       );
-      return res.status(400).json({ message: "Invalid OTP code." });
+      return res.status(statusCode).json({ message });
     }
 
-    await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        isVerified: true,
-        otpHash: null,
-        otpExpiresAt: null,
-        otpAttempts: 0,
-        otpResendCount: 0,
-        otpLastSentAt: null,
-        otpLockedUntil: null,
-      },
-    });
+    const updatedUser = await updateUserVerificationStatus(user.id, VERIFICATION_CODE_TYPE_EMAIL);
+    const isVerified = updatedUser?.isVerified ?? false;
+    const fullyVerified = (updatedUser?.emailVerified ?? false) && (updatedUser?.phoneVerified ?? false);
 
-    const token = createToken(user.id);
-    sendTokenCookie(res, token);
-    await issueRefreshToken(user.id, res);
+    // Phase 1: Issue tokens when minimum verification is met (at least one method verified)
+    if (isVerified) {
+      const token = createToken(user.id, true, updatedUser?.phoneVerified ?? false);
+      sendTokenCookie(res, token);
+      await issueRefreshToken(user.id, res);
+    }
 
     writeAuditLog(
       {
         action: "auth.verify_otp",
         userId: user.id,
         workspaceId: user.workspaceId,
-        resource: "verify",
+        resource: "verify-email",
       },
       req,
     );
 
-    logger.info("auth", "verify_otp_success", { userId: user.id, email: user.email });
-    logger.info("auth", "session_created", { userId: user.id, tokenTTL: JWT_EXPIRES_IN });
-
-    const workspaceOwner = await prisma.user.findFirst({
-      where: { workspaceId: user.workspaceId },
-      orderBy: { createdAt: "asc" },
-      select: { id: true },
-    });
-    const isWorkspaceOwner = workspaceOwner?.id === user.id;
-    const normalizedRole = normalizeRole(user.role, isWorkspaceOwner);
-    const permissions = getPermissionsForRole(normalizedRole);
-
     return res.status(200).json({
-      message: "Account verified successfully.",
-      user: {
-        id: user.id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        activeWorkspaceId: user.workspaceId,
-        activeWorkspaceName: user.workspace.name,
-        role: normalizedRole,
-        permissions,
-      },
+      message: fullyVerified
+        ? "Email verified. Your account is now fully verified."
+        : "Email verified. You can verify your phone later from Settings.",
+      emailVerified: true,
+      phoneVerified: updatedUser?.phoneVerified ?? false,
+      isVerified,
+      fullyVerified,
     });
   } catch (error) {
     return next(error);
   }
+}
+
+export async function verifyPhoneOtp(req: Request, res: Response, next: NextFunction) {
+  try {
+    const body = req.body as Record<string, unknown>;
+    const phone = body.phone as string | undefined;
+    const code = body.code as string | number | undefined;
+
+    if (!phone || !code) {
+      return res.status(400).json({ message: "Phone and OTP code are required." });
+    }
+
+    if (!/^\d{6}$/.test(String(code))) {
+      return res.status(400).json({ message: "OTP code must be a 6-digit number." });
+    }
+
+    const user = await resolveUserForVerification(phone);
+    if (!user || !user.phone) {
+      writeAuditLog(
+        { action: "auth.verify_otp_failed", outcome: "failure", resource: "verify-phone" },
+        req,
+      );
+      return res.status(400).json({ message: "Unable to verify the provided phone and code." });
+    }
+
+    if (user.phoneVerified) {
+      return res.status(200).json({
+        message: "Phone is already verified.",
+        emailVerified: user.emailVerified,
+        phoneVerified: true,
+        isVerified: user.isVerified,
+      });
+    }
+
+    const validation = await validateVerificationCode(user.id, VERIFICATION_CODE_TYPE_PHONE, user.phone, String(code));
+    if (validation.status !== "ok") {
+      const statusCode = validation.status === "locked" ? 429 : 400;
+      const message =
+        validation.status === "expired"
+          ? "OTP has expired. Please request a new code."
+          : validation.status === "locked"
+          ? "Too many invalid attempts. Please request a new code."
+          : "Invalid OTP code.";
+
+      writeAuditLog(
+        {
+          action: "auth.verify_otp_failed",
+          outcome: "failure",
+          userId: user.id,
+          workspaceId: user.workspaceId,
+          resource: "verify-phone",
+        },
+        req,
+      );
+      return res.status(statusCode).json({ message });
+    }
+
+    const updatedUser = await updateUserVerificationStatus(user.id, VERIFICATION_CODE_TYPE_PHONE);
+    const isVerified = updatedUser?.isVerified ?? false;
+    const fullyVerified = (updatedUser?.emailVerified ?? false) && (updatedUser?.phoneVerified ?? false);
+
+    // Phase 1: Issue tokens when minimum verification is met (at least one method verified)
+    if (isVerified) {
+      const token = createToken(user.id, updatedUser?.emailVerified ?? false, true);
+      sendTokenCookie(res, token);
+      await issueRefreshToken(user.id, res);
+    }
+
+    writeAuditLog(
+      {
+        action: "auth.verify_otp",
+        userId: user.id,
+        workspaceId: user.workspaceId,
+        resource: "verify-phone",
+      },
+      req,
+    );
+
+    return res.status(200).json({
+      message: fullyVerified
+        ? "Phone verified. Your account is now fully verified."
+        : "Phone verified. You can verify your email later from Settings.",
+      emailVerified: updatedUser?.emailVerified ?? false,
+      phoneVerified: true,
+      isVerified,
+      fullyVerified,
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+export async function verifyOtp(req: Request, res: Response, next: NextFunction) {
+  const body = req.body as Record<string, unknown>;
+  const contact = body.contact as string | undefined;
+  const code = body.code as string | number | undefined;
+
+  if (!contact) {
+    return res.status(400).json({ message: "Contact is required." });
+  }
+
+  const parsed = parseContact(contact);
+  if (parsed.email) {
+    req.body = { email: parsed.email, code };
+    return verifyEmailOtp(req, res, next);
+  }
+
+  if (parsed.phone) {
+    req.body = { phone: parsed.phone, code };
+    return verifyPhoneOtp(req, res, next);
+  }
+
+  return res.status(400).json({ message: "Enter a valid email address or phone number." });
 }
 
 export async function resendOtp(req: Request, res: Response, next: NextFunction) {
@@ -764,7 +1272,15 @@ export async function resendOtp(req: Request, res: Response, next: NextFunction)
       return res.status(400).json({ message: "Contact is required." });
     }
 
+    const parsed = parseContact(contact);
+    if (!parsed.email && !parsed.phone) {
+      return res.status(400).json({ message: "Enter a valid email address or phone number." });
+    }
+
+    const type = parsed.email ? VERIFICATION_CODE_TYPE_EMAIL : VERIFICATION_CODE_TYPE_PHONE;
+    const target = parsed.email ?? parsed.phone!;
     const user = await findUserByContact(contact);
+
     if (!user) {
       return res
         .status(200)
@@ -775,55 +1291,60 @@ export async function resendOtp(req: Request, res: Response, next: NextFunction)
       return res.status(400).json({ message: "Account is already verified." });
     }
 
+    if (type === VERIFICATION_CODE_TYPE_EMAIL && user.emailVerified) {
+      return res.status(400).json({ message: "Email is already verified." });
+    }
+
+    if (type === VERIFICATION_CODE_TYPE_PHONE && user.phoneVerified) {
+      return res.status(400).json({ message: "Phone is already verified." });
+    }
+
     const now = new Date();
-    if (
-      user.otpLastSentAt &&
-      now.getTime() - user.otpLastSentAt.getTime() < OTP_RESEND_COOLDOWN_MS
-    ) {
+    const latestCode = await findLatestActiveVerificationCode(user.id, type, target);
+
+    if (latestCode && now.getTime() - latestCode.createdAt.getTime() < OTP_RESEND_COOLDOWN_MS) {
       return res.status(429).json({ message: "Please wait before requesting another code." });
     }
 
-    let resendCount = user.otpResendCount ?? 0;
-    if (user.otpLastSentAt && now.getTime() - user.otpLastSentAt.getTime() > OTP_RESEND_WINDOW_MS) {
-      resendCount = 0;
+    let resendCount = 1;
+    if (latestCode && now.getTime() - latestCode.createdAt.getTime() <= OTP_RESEND_WINDOW_MS) {
+      resendCount = latestCode.resendCount + 1;
     }
 
-    if (resendCount >= OTP_MAX_RESENDS) {
+    if (resendCount > OTP_MAX_RESENDS) {
       return res.status(429).json({ message: "Resend limit reached. Please try again later." });
     }
 
+    await invalidateVerificationCodes(prisma, user.id, type);
+
     const otp = generateOtp();
-    const otpHash = await hashOtp(otp);
-    const expiresAt = new Date(Date.now() + OTP_TTL_MS);
-
-    await prisma.$transaction(async (tx) => {
-      await tx.user.update({
-        where: { id: user.id },
-        data: {
-          otpHash,
-          otpExpiresAt: expiresAt,
-          otpAttempts: 0,
-          otpResendCount: resendCount + 1,
-          otpLastSentAt: now,
-          otpLockedUntil: null,
-        },
-      });
-
-      const otpSent = await sendOtp(
-        { email: user.email ?? undefined, phone: user.phone ?? undefined },
-        otp,
-      );
-      if (!otpSent) {
-        throw new Error("Failed to send verification code");
-      }
+    await createVerificationCode(prisma, {
+      userId: user.id,
+      type,
+      target,
+      otp,
+      now,
     });
+
+    let sent = false;
+    if (type === VERIFICATION_CODE_TYPE_EMAIL && user.email) {
+      sent = await sendVerificationEmail(user.email, otp);
+    }
+
+    if (type === VERIFICATION_CODE_TYPE_PHONE && user.phone) {
+      sent = await sendSmsOtp({ phone: user.phone, otp });
+    }
+
+    if (!sent) {
+      throw new Error("Failed to send verification code");
+    }
 
     writeAuditLog(
       {
         action: "auth.resend_otp",
         userId: user.id,
         workspaceId: user.workspaceId,
-        resource: "resend-otp",
+        resource: type === VERIFICATION_CODE_TYPE_EMAIL ? "resend-email-otp" : "resend-phone-otp",
       },
       req,
     );
@@ -838,6 +1359,189 @@ export async function resendOtp(req: Request, res: Response, next: NextFunction)
         message: "Unable to send verification code. Check mail/SMS settings and try again.",
       });
     }
+    return next(error);
+  }
+}
+
+export async function sendEmailOtp(req: Request, res: Response, next: NextFunction) {
+  try {
+    const body = req.body as Record<string, unknown>;
+    const email = body.email as string | undefined;
+
+    if (!email) {
+      return res.status(400).json({ message: "Email is required." });
+    }
+
+    const user = await findUserByContact(email);
+    if (!user || !user.email) {
+      return res
+        .status(200)
+        .json({ message: "If this account exists, a fresh email OTP has been sent." });
+    }
+
+    if (user.emailVerified) {
+      return res.status(400).json({ message: "Email is already verified." });
+    }
+
+    const now = new Date();
+    const target = user.email;
+    const latestCode = await findLatestActiveVerificationCode(user.id, VERIFICATION_CODE_TYPE_EMAIL, target);
+
+    if (latestCode && now.getTime() - latestCode.createdAt.getTime() < OTP_RESEND_COOLDOWN_MS) {
+      return res.status(429).json({ message: "Please wait before requesting another code." });
+    }
+
+    let resendCount = 1;
+    if (latestCode && now.getTime() - latestCode.createdAt.getTime() <= OTP_RESEND_WINDOW_MS) {
+      resendCount = latestCode.resendCount + 1;
+    }
+
+    if (resendCount > OTP_MAX_RESENDS) {
+      return res.status(429).json({ message: "Resend limit reached. Please try again later." });
+    }
+
+    await invalidateVerificationCodes(prisma, user.id, VERIFICATION_CODE_TYPE_EMAIL);
+
+    const otp = generateOtp();
+    await createVerificationCode(prisma, {
+      userId: user.id,
+      type: VERIFICATION_CODE_TYPE_EMAIL,
+      target,
+      otp,
+      now,
+    });
+
+    const sent = await sendVerificationEmail(target, otp);
+    if (!sent) {
+      throw new Error("Failed to send verification code");
+    }
+
+    writeAuditLog(
+      {
+        action: "auth.resend_otp",
+        userId: user.id,
+        workspaceId: user.workspaceId,
+        resource: "send-email-otp",
+      },
+      req,
+    );
+
+    return res.status(200).json({
+      message: "A fresh email OTP has been sent.",
+      cooldownSeconds: Math.floor(OTP_RESEND_COOLDOWN_MS / 1000),
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "Failed to send verification code") {
+      return res.status(500).json({
+        message: "Unable to send verification code. Check mail/SMS settings and try again.",
+      });
+    }
+    return next(error);
+  }
+}
+
+export async function sendPhoneOtp(req: Request, res: Response, next: NextFunction) {
+  try {
+    const body = req.body as Record<string, unknown>;
+    const phone = body.phone as string | undefined;
+
+    if (!phone) {
+      return res.status(400).json({ message: "Phone is required." });
+    }
+
+    const user = await findUserByContact(phone);
+    if (!user || !user.phone) {
+      return res
+        .status(200)
+        .json({ message: "If this account exists, a fresh phone OTP has been sent." });
+    }
+
+    if (user.phoneVerified) {
+      return res.status(400).json({ message: "Phone is already verified." });
+    }
+
+    const now = new Date();
+    const target = user.phone;
+    const latestCode = await findLatestActiveVerificationCode(user.id, VERIFICATION_CODE_TYPE_PHONE, target);
+
+    if (latestCode && now.getTime() - latestCode.createdAt.getTime() < OTP_RESEND_COOLDOWN_MS) {
+      return res.status(429).json({ message: "Please wait before requesting another code." });
+    }
+
+    let resendCount = 1;
+    if (latestCode && now.getTime() - latestCode.createdAt.getTime() <= OTP_RESEND_WINDOW_MS) {
+      resendCount = latestCode.resendCount + 1;
+    }
+
+    if (resendCount > OTP_MAX_RESENDS) {
+      return res.status(429).json({ message: "Resend limit reached. Please try again later." });
+    }
+
+    await invalidateVerificationCodes(prisma, user.id, VERIFICATION_CODE_TYPE_PHONE);
+
+    const otp = generateOtp();
+    await createVerificationCode(prisma, {
+      userId: user.id,
+      type: VERIFICATION_CODE_TYPE_PHONE,
+      target,
+      otp,
+      now,
+    });
+
+    const sent = await sendSmsOtp({ phone: target, otp });
+    if (!sent) {
+      throw new Error("Failed to send verification code");
+    }
+
+    writeAuditLog(
+      {
+        action: "auth.resend_otp",
+        userId: user.id,
+        workspaceId: user.workspaceId,
+        resource: "send-phone-otp",
+      },
+      req,
+    );
+
+    return res.status(200).json({
+      message: "A fresh phone OTP has been sent.",
+      cooldownSeconds: Math.floor(OTP_RESEND_COOLDOWN_MS / 1000),
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "Failed to send verification code") {
+      return res.status(500).json({
+        message: "Unable to send verification code. Check mail/SMS settings and try again.",
+      });
+    }
+    return next(error);
+  }
+}
+
+export async function getVerificationStatus(req: Request, res: Response, next: NextFunction) {
+  try {
+    const contact = req.query?.contact as string | undefined;
+    if (!contact) {
+      return res.status(400).json({ message: "Contact is required." });
+    }
+
+    const user = await findUserByContact(contact);
+    if (!user) {
+      return res.status(404).json({ message: "Unable to find verification status for this contact." });
+    }
+
+    const hasMinimumVerification = user.emailVerified || user.phoneVerified;
+    const fullyVerified = user.emailVerified && user.phoneVerified;
+
+    return res.status(200).json({
+      emailVerified: user.emailVerified,
+      phoneVerified: user.phoneVerified,
+      isVerified: user.isVerified,
+      hasMinimumVerification,
+      fullyVerified,
+      email: maskEmail(user.email),
+      phone: maskPhone(user.phone),
+    });
+  } catch (error) {
     return next(error);
   }
 }
@@ -861,6 +1565,8 @@ export async function getMe(req: Request, res: Response, next: NextFunction) {
       lastName: string;
       role: string;
       workspaceId: string;
+      emailVerified: boolean;
+      phoneVerified: boolean;
       workspace: {
         id: string;
         name: string;
@@ -889,6 +1595,8 @@ export async function getMe(req: Request, res: Response, next: NextFunction) {
               lastName: true,
               role: true,
               workspaceId: true,
+              emailVerified: true,
+              phoneVerified: true,
               workspace: {
                 select: {
                   id: true,
@@ -949,6 +1657,9 @@ export async function getMe(req: Request, res: Response, next: NextFunction) {
     // Use the new account state helper with the minimal billing snapshot.
     const accountInfo = getAccountInfo(user, billing);
 
+    const hasMinimumVerification = user.emailVerified || user.phoneVerified;
+    const fullyVerified = user.emailVerified && user.phoneVerified;
+
     return res.status(200).json({
       success: true,
       user: {
@@ -960,6 +1671,10 @@ export async function getMe(req: Request, res: Response, next: NextFunction) {
         fullName: `${user.firstName} ${user.lastName}`.trim(),
         role,
         permissions,
+        emailVerified: user.emailVerified,
+        phoneVerified: user.phoneVerified,
+        hasMinimumVerification,
+        fullyVerified,
         organization: {
           id: user.workspace.id,
           name: user.workspace.name,
@@ -1073,7 +1788,7 @@ export async function refreshToken(req: Request, res: Response, next: NextFuncti
     }
 
     // rotate
-    const newAccessToken = createToken(user.id);
+    const newAccessToken = createToken(user.id, user.emailVerified, user.phoneVerified);
     sendTokenCookie(res, newAccessToken);
     await issueRefreshToken(user.id, res);
 

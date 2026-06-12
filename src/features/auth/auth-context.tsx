@@ -29,6 +29,7 @@ const PUBLIC_ROUTES = new Set([
   "/signin",
   "/signup",
   "/verify",
+  "/verify-account",
   "/forgot-password",
   "/reset-password",
   "/demo",
